@@ -6,11 +6,18 @@ using UnityEngine;
 
 public class AStar {
 
+    //为了简化计算，用10,14分别代表走直线（代价1）和走斜线（代价根号2）的代价
+    public const int STRAIGHT_COST = 10;
+
+    public const int DIAGONAL_COST = 14;
+
     public Node[,] nodes;
 
     public int width { get; private set; }
 
     public int height { get; private set; }
+
+    public bool allowDiagonalMove { get; set; } = true;
 
     int m_LoopCount = 0;
     public int loopCount {
@@ -19,11 +26,9 @@ public class AStar {
         }
     }
 
-    BinaryHeap<Node> m_OpenHeap = new BinaryHeap<Node>(Comparer<Node>.Create((a, b) => {
-        return a.f.CompareTo(b.f);
-    }));
+    BinaryHeap<Node> m_OpenHeap = new BinaryHeap<Node>();
 
-    private HashSet<Node> m_CloseSet = new HashSet<Node>();
+    private List<Node> m_DirtyList = new List<Node>();
 
     /// <summary>
     /// 启发函数
@@ -57,27 +62,35 @@ public class AStar {
         }
     }
 
+    /// <summary>
+    /// 在自定义启发函数时，距离的计算必须使用NORMAL_COST和DIAGONAL_COST
+    /// </summary>
+    /// <param name="func"></param>
     public void SetHeuristicFunction(Func<Node, Node, int> func) {
         m_HeuristicFunction = func;
     }
 
     public float stepTime = 0.2f;
     public IEnumerator GeneratePath(Vector2Int start, Vector2Int end, Action<bool, List<Vector2Int>> onGenerated, Action<Node> onAddToOpen, Action<Node> onRemoveFromOpen, Action<Node> onAddToClose) {
-        var startNode = nodes[start.x, start.y];
-        var endNode = nodes[end.x, end.y];
-        startNode.Reset();
         m_LoopCount = 0;
+        CleanDirtyNodes();
         m_OpenHeap.Clear();
-        m_CloseSet.Clear();
-        m_OpenHeap.Insert(startNode);
+        var startNode = nodes[start.x, start.y];
+        var closestNode = startNode;
+        var endNode = nodes[end.x, end.y];
+        startNode.h = m_HeuristicFunction(startNode, endNode);
+        m_DirtyList.Add(startNode);
+        m_OpenHeap.Push(startNode);
         onAddToOpen(startNode);
         yield return new WaitForSeconds(stepTime);
-        Node curNode = null;
         List<Vector2Int> path = new List<Vector2Int>();
-        StringBuilder sb = new StringBuilder();
         while (m_OpenHeap.Count > 0) {
             //寻找OpenList中代价最小的节点
-            curNode = m_OpenHeap.PopTop();
+            var curNode = m_OpenHeap.Pop();
+            onRemoveFromOpen(curNode);
+            curNode.isClosed = true;
+            onAddToClose(curNode);
+            yield return new WaitForSeconds(stepTime);
             if (curNode == endNode) {
                 Node tempNode = endNode;
                 while (tempNode != startNode) {
@@ -89,27 +102,27 @@ public class AStar {
                 onGenerated(true, path);
                 yield break;
             }
-            //m_OpenList.Remove(curNode);
-            onRemoveFromOpen(curNode);
-            m_CloseSet.Add(curNode);
-            onAddToClose(curNode);
             yield return new WaitForSeconds(stepTime);
             var neighborNodes = GetNeighborNodes(curNode);
             for (int i = 0; i < neighborNodes.Count; i++) {
-                var node = neighborNodes[i];
-                if (!node.walkable || m_CloseSet.Contains(node))
+                var neighbor = neighborNodes[i];
+                if (neighbor.isClosed || !neighbor.walkable)
                     continue;
-                int newCost = curNode.g + m_HeuristicFunction(curNode, node);
-                bool isOpen = m_OpenHeap.Contains(node);
-                if (newCost < node.g || !isOpen) {
-                    node.g = newCost;
-                    node.h = m_HeuristicFunction(node, endNode);
-                    node.f = node.g + node.h;
-                    node.parent = curNode;
-                    if (!isOpen) {
-                        m_OpenHeap.Insert(node);
-                        onAddToOpen(node);
-                        yield return new WaitForSeconds(stepTime);
+                int gScore = curNode.g + CalculateWalkCost(curNode, neighbor);
+                bool isVisited = neighbor.isVisited;
+                if (!isVisited || gScore < neighbor.g) {
+                    neighbor.isVisited = true;
+                    neighbor.parent = curNode;
+                    neighbor.h = m_HeuristicFunction(neighbor, endNode);
+                    neighbor.g = gScore;
+                    neighbor.f = neighbor.g + neighbor.h;
+                    m_DirtyList.Add(neighbor);
+                    if (!isVisited) {
+                        m_OpenHeap.Push(neighbor);
+                        onAddToOpen(neighbor);
+                    }
+                    else {
+                        m_OpenHeap.Maintain(neighbor);
                     }
                 }
             }
@@ -131,8 +144,11 @@ public class AStar {
                 //越界检测
                 if (!CheckBounds(x, y))
                     continue;
-                //斜线障碍物检测
-                if ((Mathf.Abs(i) + Mathf.Abs(j)) == 2) {
+                //走斜线
+                if (x != node.x && y != node.y) {
+                    if (!allowDiagonalMove)
+                        continue;
+                    //斜线障碍物检测
                     if (!nodes[node.x, y].walkable || !nodes[x, node.y].walkable)
                         continue;
                 }
@@ -142,23 +158,42 @@ public class AStar {
         return list;
     }
 
+    /// <summary>
+    /// 计算移动到相邻节点的开销
+    /// </summary>
+    /// <param name="node"></param>
+    /// <param name="neighbor"></param>
+    /// <returns></returns>
+    int CalculateWalkCost(Node node, Node neighbor) {
+        if (node.x != neighbor.x && node.y != neighbor.y) {
+            return DIAGONAL_COST;
+        }
+        return STRAIGHT_COST;
+    }
+
     bool CheckBounds(int x, int y) {
         return x < width && x >= 0 && y < height && y >= 0;
     }
+    void CleanDirtyNodes() {
+        for (int i = 0; i < m_DirtyList.Count; i++) {
+            m_DirtyList[i].Reset();
+        }
+        m_DirtyList.Clear();
+    }
+
 
     /// <summary>
-    /// 曼哈顿距离
+    /// 曼哈顿距离（乘上移动单格的开销）
     /// </summary>
     /// <param name="a"></param>
     /// <param name="b"></param>
     /// <returns></returns>
     int Manhattan(Node a, Node b) {
-        return Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y);
+        return (Mathf.Abs(b.x - a.x) + Mathf.Abs(b.y - a.y)) * STRAIGHT_COST;
     }
 
     /// <summary>
     /// 网格对角线距离，Diagonal算法的特殊情况
-    /// 为了简化计算，用10,14分别代表走直线（代价1）和走斜线（代价根号2）的代价
     /// </summary>
     /// <param name="a"></param>
     /// <param name="b"></param>
@@ -166,32 +201,27 @@ public class AStar {
     int Octile(Node a, Node b) {
         int dx = Mathf.Abs(a.x - b.x);
         int dy = Mathf.Abs(a.y - b.y);
-        return 10 * Mathf.Max(dx, dy) + (14 - 10) * Mathf.Min(dx, dy);
+        return STRAIGHT_COST * Mathf.Max(dx, dy) + (DIAGONAL_COST - STRAIGHT_COST) * Mathf.Min(dx, dy);
     }
 }
 
-public class Node {
+public class Node : IComparable<Node> {
 
     public Node parent;
 
     public bool walkable;
 
+    public bool isVisited;
+
+    public bool isClosed;
+
     public int x, y;
 
-    /// <summary>
-    /// 移动成本
-    /// </summary>
-    public int g;
+    public int g, h;
 
-    /// <summary>
-    /// 启发法得到的与终点的距离
-    /// </summary>
-    public int h;
-
-    /// <summary>
-    /// 整体成本
-    /// </summary>
     public int f;
+
+    public Node() { }
 
     public Node(int x, int y, bool walkable) {
         this.x = x;
@@ -200,12 +230,17 @@ public class Node {
     }
 
     public void Reset() {
-        g = h = 0;
         parent = null;
+        g = h = f = 0;
+        isVisited = isClosed = false;
     }
 
     public Vector2Int GetLocation() {
         return new Vector2Int(x, y);
+    }
+
+    public int CompareTo(Node other) {
+        return f.CompareTo(other.f);
     }
 }
 

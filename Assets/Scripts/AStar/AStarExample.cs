@@ -7,6 +7,8 @@ public class AStarExample : MonoBehaviour {
 
     public Transform start, end;
 
+    public Tilemap groundLayer;
+
     public Tilemap blockLayer;
 
     public Tilemap pathLayer;
@@ -21,11 +23,13 @@ public class AStarExample : MonoBehaviour {
 
     public HeuristicFunctionType functionType = HeuristicFunctionType.Manhattan;
 
+    public bool allowDiagonalMove = true;
+
     // Use this for initialization
     void Start() {
-        bool[,] walkableData = new bool[blockLayer.size.x, blockLayer.size.y];
-        for (int i = 0; i < blockLayer.size.x; i++) {
-            for (int j = 0; j < blockLayer.size.y; j++) {
+        bool[,] walkableData = new bool[groundLayer.size.x, groundLayer.size.y];
+        for (int i = 0; i < walkableData.GetLength(0); i++) {
+            for (int j = 0; j < walkableData.GetLength(1); j++) {
                 if (blockLayer.GetTile(new Vector3Int(i, j, 0)) == null) {
                     walkableData[i, j] = true;
                 }
@@ -38,8 +42,10 @@ public class AStarExample : MonoBehaviour {
         if (GUILayout.Button("计算路径")) {
             aStar.stepTime = stepTime;
             aStar.SetHeuristicFunction(functionType);
-            var startLoc = pathLayer.WorldToCell(start.position);
-            var endLoc = pathLayer.WorldToCell(end.position);
+            aStar.allowDiagonalMove = allowDiagonalMove;
+            var startLoc = groundLayer.WorldToCell(start.position);
+            var endLoc = groundLayer.WorldToCell(end.position);
+            Debug.Log($"{startLoc}-{endLoc}");
             pathLayer.ClearAllTiles();
             openLayer.ClearAllTiles();
             closedLayer.ClearAllTiles();
